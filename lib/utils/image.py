@@ -5,6 +5,18 @@ import random
 from PIL import Image
 from bbox.bbox_transform import clip_boxes, clip_quadrangle_boxes
 
+# Randomize color
+def jitter_color(imgs, roidb, degree=.5):
+    assert (len(imgs) == len(roidb))
+    new_imgs = []
+    for im in imgs:
+        with mx.Context(mx.gpu(0)):
+            aug = mx.image.ColorJitterAug(brightness=degree, contrast=degree, saturation=degree)
+            aug_image = aug(mx.nd.array(im)).asnumpy()
+            new_imgs.append(aug_image)
+    return new_imgs, roidb
+
+
 # TODO: This two functions should be merged with individual data loader
 def get_image(roidb, config):
     """
@@ -30,6 +42,10 @@ def get_image(roidb, config):
         target_size = config.SCALES[scale_ind][0]
         max_size = config.SCALES[scale_ind][1]
         im, im_scale = resize(im, target_size, max_size, stride=config.network.IMAGE_STRIDE)
+        
+        # color jitter!
+        [im], [new_rec]  = jitter_color([im], [new_rec])
+
         im_tensor = transform(im, config.network.PIXEL_MEANS)
         processed_ims.append(im_tensor)
         im_info = [im_tensor.shape[2], im_tensor.shape[3], im_scale]
