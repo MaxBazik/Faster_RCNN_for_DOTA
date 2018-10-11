@@ -5,6 +5,61 @@ import random
 from PIL import Image
 from bbox.bbox_transform import clip_boxes, clip_quadrangle_boxes
 
+# Randomize affine
+def jitter_affine(imgs, roidb, degree=.4):
+    new_ims, new_rs = [], []
+    for im,r in zip(imgs, roidb):
+        kss = np.array([[1,0],[0,1]]) + (np.random.random((2,2))-.5) * degree
+        k = np.zeros((3,3))
+        k[:2,:2] = kss
+        k[-1,-1] = 1
+        s = im.shape[0:2]
+        ma,mi = np.amax(im, axis=(0,1)), np.amin(im, axis=(0,1))
+        dr = ma-mi
+        im2 = warp((im-mi)/dr,k)
+        im2 = im2*dr + mi
+
+        p1, p2, p3, p4 = r['boxes'][:,0:2], r['boxes'][:,2:4],r['boxes'][:,[0,3]], r['boxes'][:,[2,1]]
+        p1f = kss.dot(p1.T).T
+        p2f = kss.dot(p2.T).T
+        p3f = kss.dot(p3.T).T
+        p4f = kss.dot(p4.T).T
+
+        tl_x = np.min(np.vstack((p1f[:,0],p2f[:,0],p3f[:,0],p4f[:,0])).T, axis=1)
+        tl_y = np.min(np.vstack((p1f[:,1],p2f[:,1],p3f[:,1],p4f[:,1])).T, axis=1)
+
+        br_x = np.max(np.vstack((p1f[:,0],p2f[:,0],p3f[:,0],p4f[:,0])).T, axis=1)
+        br_y = np.max(np.vstack((p1f[:,1],p2f[:,1],p3f[:,1],p4f[:,1])).T, axis=1)
+      
+        boxes = np.vstack([tl_x, tl_y, br_x, br_y]).T
+        skip = np.logical_or( np.logical_or (tl_x<0, tl_y<0), 
+                              np.logical_or (br_x>=im.shape[1],
+                                             br_y>=im.shape[0]))
+        skip2 = np.logical_or(br_x-tl_x < 3, br_y-tl_y < 3)
+        if sum(skip2):
+            print "SKIP!"
+            print boxes[skip2]
+        keep = np.logical_not(np.logical_or(skip, skip2))
+        
+        # special case of blowing up our only box
+        if not sum(keep.astype(np.int32)) and len(keep):
+            new_ims.append(im)
+            new_rs.append(r)
+            continue
+        else: 
+            r['boxes'] = boxes[keep]
+            r['max_classes'] = r['max_classes'][keep]
+            r['gt_classes'] = r['gt_classes'][keep]
+            r['max_overlaps'] = r['max_overlaps'][keep]
+            r['gt_overlaps'] = r['gt_overlaps'][keep]
+            
+            new_ims.append(im2)
+            new_rs.append(r)
+    if min(new_rs[0]['boxes'].ravel())<0:
+        print ("NEGATIVE BBOX VALUE ... SHOULD BE IMPOSSIBLE!")
+        from IPython import embed; embed()
+    return new_ims, new_rs
+
 # TODO: This two functions should be merged with individual data loader
 def get_image(roidb, config):
     """
@@ -21,6 +76,13 @@ def get_image(roidb, config):
     processed_roidb = []
     for i in range(num_images):
         roi_rec = roidb[i]
+
+        # reset to old boxes when we load old image in
+    	if 'box_reset' in roi_rec:
+            roi_rec['boxes'] = np.copy(roi_rec['box_reset'])
+        else:
+            roi_rec['box_reset'] = np.copy(roi_rec['boxes'])
+
         assert os.path.exists(roi_rec['image']), '%s does not exist'.format(roi_rec['image'])
         im = cv2.imread(roi_rec['image'], cv2.IMREAD_COLOR|cv2.IMREAD_IGNORE_ORIENTATION)
         if roidb[i]['flipped']:
@@ -30,6 +92,9 @@ def get_image(roidb, config):
         target_size = config.SCALES[scale_ind][0]
         max_size = config.SCALES[scale_ind][1]
         im, im_scale = resize(im, target_size, max_size, stride=config.network.IMAGE_STRIDE)
+        
+        [im], [new_rec]  = jitter_affine(    [im], [new_rec])
+
         im_tensor = transform(im, config.network.PIXEL_MEANS)
         processed_ims.append(im_tensor)
         im_info = [im_tensor.shape[2], im_tensor.shape[3], im_scale]
