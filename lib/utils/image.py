@@ -21,6 +21,13 @@ def get_image(roidb, config):
     processed_roidb = []
     for i in range(num_images):
         roi_rec = roidb[i]
+
+        # reset to old boxes when we load old image in
+    	if 'box_reset' in roi_rec:
+            roi_rec['boxes'] = np.copy(roi_rec['box_reset'])
+        else:
+            roi_rec['box_reset'] = np.copy(roi_rec['boxes'])
+
         assert os.path.exists(roi_rec['image']), '%s does not exist'.format(roi_rec['image'])
         im = cv2.imread(roi_rec['image'], cv2.IMREAD_COLOR|cv2.IMREAD_IGNORE_ORIENTATION)
         if roidb[i]['flipped']:
@@ -29,11 +36,24 @@ def get_image(roidb, config):
         scale_ind = random.randrange(len(config.SCALES))
         target_size = config.SCALES[scale_ind][0]
         max_size = config.SCALES[scale_ind][1]
-        im, im_scale = resize(im, target_size, max_size, stride=config.network.IMAGE_STRIDE)
+
+        p1 = (max_size - im.shape[0]) * np.random.rand()
+        p1 = int(p1)
+        p2 = max_size - im.shape[0] - p1
+        p3 = (max_size - im.shape[1]) * np.random.rand()
+        p3 = int(p3)
+        p4 = max_size - im.shape[1] - p3
+        if p1 or p3 or p3 or p4:
+            print im.shape
+            im = np.pad(im, [(p1, p2), (p3, p4), (0,0)], lambda w,x,y,z:0)
+        new_rec['boxes'] += [p3,p1,p3,p1]
+        im_scale = 1.0
+        #im, im_scale = resize(im, target_size, max_size, stride=config.network.IMAGE_STRIDE)
+        
         im_tensor = transform(im, config.network.PIXEL_MEANS)
         processed_ims.append(im_tensor)
         im_info = [im_tensor.shape[2], im_tensor.shape[3], im_scale]
-        new_rec['boxes'] = clip_boxes(np.round(roi_rec['boxes'].copy() * im_scale), im_info[:2])
+        #new_rec['boxes'] = clip_boxes(np.round(roi_rec['boxes'].copy() * im_scale), im_info[:2])
         new_rec['im_info'] = im_info
         processed_roidb.append(new_rec)
     return processed_ims, processed_roidb
